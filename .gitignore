@@ -22,3 +22,8 @@ node_modules/
 # Web panel runtime data: user credentials + every build's baked cfg.json
 # (live bot tokens). This MUST stay out of git.
 panel_data/
+
+# Cloudflare Worker local state / secrets -- never commit .dev.vars or wrangler cache
+cloudflare-worker/.wrangler/
+cloudflare-worker/.dev.vars
+**/node_modules/
