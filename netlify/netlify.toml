@@ -1,9 +1,0 @@
-# netlify.toml -- routes /api/license to the licence function.
-[build]
-  publish = "public"
-
-[[redirects]]
-  from = "/api/license"
-  to = "/.netlify/functions/license"
-  status = 200
-  force = true

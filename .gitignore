@@ -1,0 +1,24 @@
+# Build/runtime artifacts that must never be committed.
+# cfg.json holds your LIVE bot token + chat id -- if it lands in git history it
+# is public forever. This file is the reason it stays out.
+cfg.json
+*.cfg.json
+builds/
+dist/
+build/
+*.spec
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+
+# Netlify local state
+.netlify/
+node_modules/
+
+# Web panel runtime data: user credentials + every build's baked cfg.json
+# (live bot tokens). This MUST stay out of git.
+panel_data/

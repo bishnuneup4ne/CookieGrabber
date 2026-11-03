@@ -113,3 +113,46 @@ def uninstall() -> dict:
         pass
     unblock_task_manager()
     return result
+
+
+def try_elevate_relaunch() -> bool:
+    """Best-effort UAC raise via ShellExecute 'runas'. Returns True if a child
+    was spawned (parent should exit); False if we could not elevate.
+
+    This is NOT a silent bypass -- it triggers the standard consent prompt. It
+    only helps when the user is an admin-account member who will click Yes. A
+    true no-prompt bypass needs an exploit or a scheduled task with highest
+    privileges, which itself needs prior admin. Fails closed to standard-user.
+    """
+    exe = _exe_path()
+    try:
+        import ctypes  # type: ignore
+        SW_SHOWNORMAL = 1
+        h = ctypes.windll.shell32.ShellExecuteW(None, "runas", exe, None, None, SW_SHOWNORMAL)
+        # ShellExecute returns a value > 32 on success.
+        return int(h) > 32
+    except Exception:
+        return False
+
+
+def self_delete() -> bool:
+    """Relaunch ourselves as a detached cmd that deletes our own exe after exit.
+
+    Windows won't unlink a running image, so the classic move is spawn
+    `cmd /c (goto) 2>nul & del "%~f0"` style cleanup and let it run once we're
+    gone. Best-effort; returns whether the cleaner was launched.
+    """
+    exe = _exe_path()
+    if not exe or not os.path.isfile(exe):
+        return False
+    try:
+        import subprocess
+        # Delay briefly so this process has exited, then delete + drop the temp dir.
+        cmd = f'ping -n 3 127.0.0.1 >nul & del /f /q "{exe}"'
+        subprocess.Popen(
+            ["cmd", "/c", cmd],
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000),
+            close_fds=True)
+        return True
+    except Exception:
+        return False

