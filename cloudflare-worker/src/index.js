@@ -179,6 +179,30 @@ function assertCanReadBuild(user, build) {
   throw new ApiError(404, "not found");
 }
 
+// Ask GitHub Actions to run the "Build exe" workflow for this build id.
+// Needs env.GH_OWNER, GH_REPO, GH_WORKFLOW_ID (filename or numeric id), GH_PAT
+// (a fine-grained PAT with Actions:write on that repo). If any are unset we skip
+// silently -- the manual dispatch / claim=1 runner path still covers it.
+async function triggerGitHubBuild(env, buildId) {
+  const { GH_OWNER, GH_REPO, GH_WORKFLOW_ID, GH_PAT } = env;
+  if (!GH_OWNER || !GH_REPO || !GH_WORKFLOW_ID || !GH_PAT) return;
+  const url = `https://api.github.com/repos/${encodeURIComponent(GH_OWNER)}/` +
+              `${encodeURIComponent(GH_REPO)}/actions/workflows/${encodeURIComponent(GH_WORKFLOW_ID)}/dispatches`;
+  try {
+    await fetch(url, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${GH_PAT}`,
+        "content-type": "application/json",
+        "user-agent": "jwg-panel-api",
+        accept: "application/vnd.github+json",
+      },
+      // build_id is our own hex id, safe as a workflow input value.
+      body: JSON.stringify({ ref: "main", inputs: { build_id: buildId } }),
+    });
+  } catch (_) { /* best-effort; never surface to the caller */ }
+}
+
 // ------------------------------------------------------------------ bootstrap admin
 async function ensureAdmin(env, store) {
   if ((await store.indexUsers()).length) return;         // any user exists -> skip
@@ -269,6 +293,10 @@ async function handle(ctx, env, store) {
     const build = { id: uid(), uid: u.id, username: u.username, status: "queued",
       created: Date.now(), claimed_by: null, artifact: null, error: null, config: cfg };
     await store.saveBuild(build);
+    // Fire-and-forget: ask GitHub Actions to compile this build on its free
+    // Windows runner. Runs via waitUntil so the user's POST returns immediately;
+    // if GH is unreachable the manual dispatch / claim path still works.
+    ctx.waitUntil(triggerGitHubBuild(env, build.id));
     // Strip the token from the echo; caller already has it.
     const { bot_token, ...safe } = cfg;
     return json({ ok: true, build: { ...build, config: safe } });
@@ -311,12 +339,14 @@ async function handle(ctx, env, store) {
     const b = await store.get(`build:${id}`);
     if (!b) throw new ApiError(404, "no such build");
     const body = await request.json().catch(() => ({}));
-    if (body.status === "failed") { b.status = "failed"; b.error = String(body.error || "build failed").slice(0, 500); }
+    if (body.status === "building") { b.status = "building"; }
+    else if (body.status === "failed") { b.status = "failed"; b.error = String(body.error || "build failed").slice(0, 500); }
     else {
       const blob = String(body.data_base64 || "");
+      if (!blob) throw new ApiError(400, "no artifact data");
       if (blob.length > 22_000_000) throw new ApiError(413, "artifact too large for KV (~25MB cap)");
       await store.set(`blob:${id}`, blob);
-      b.status = "done"; b.artifact = id;
+      b.status = "done"; b.artifact = id; b.error = null;
     }
     await store.saveBuild(b);
     return json({ ok: true });
@@ -346,10 +376,15 @@ export default {
     const cors = corsHeaders(request.headers.get("origin"), env.ALLOWED_ORIGIN);
     if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: cors });
     const store = new Store(env.PANEL_KV);
+    // Collect deferred work (GitHub build triggers) and run it after responding.
+    const deferred = [];
+    const handlerCtx = { request, waitUntil: (p) => deferred.push(p) };
     try {
       await ensureAdmin(env, store);
-      const res = await handle({ request }, env, store);
+      const res = await handle(handlerCtx, env, store);
       for (const [k, v] of Object.entries(cors)) res.headers.set(k, v);
+      // Fire background tasks without delaying the response; swallow their errors.
+      Promise.allSettled(deferred).catch(() => {});
       return res;
     } catch (e) {
       const status = e instanceof ApiError ? e.status : 500;
