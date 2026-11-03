@@ -24,7 +24,9 @@
  *   - first admin bootstrapped from env ADMIN_USER/ADMIN_PASS at cold start
  */
 
-const ITER = 150_000;
+// Workers' WebCrypto caps PBKDF2 iterations at 100000; going above throws at
+// deriveBits time (verified against the live CF runtime). 100k is the ceiling.
+const ITER = 100_000;
 
 // ------------------------------------------------------------------ crypto
 function b64(buf) {
@@ -329,6 +331,20 @@ async function handle(ctx, env, store) {
     assertCanReadBuild(u, b);
     const { bot_token, ...safe } = b.config;
     return json({ ok: true, build: { ...b, config: safe } });
+  }
+
+  // ---- delete a build + its artifact (owner/admin) ----
+  if (path.match(/^\/api\/builds\/[^/]+$/) && method === "DELETE") {
+    const u = await requireAuth(ctx, env, store);
+    const id = path.split("/")[3];
+    const b = await store.get(`build:${id}`);
+    if (!b) throw new ApiError(404, "no such build");
+    assertCanReadBuild(u, b);                 // only owner or admin can remove it
+    await store.del(`blob:${id}`);            // drop the stored exe first
+    await store.del(`build:${id}`);
+    const idx = (await store.indexBuilds()).filter((x) => x !== id);
+    await store.set("idx:builds", idx);
+    return json({ ok: true, deleted: id });
   }
 
   // ---- runner uploads finished artifact (base64 zip/exe) ----

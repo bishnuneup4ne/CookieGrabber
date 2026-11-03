@@ -1,5 +1,5 @@
-// wrangler.toml for the JohnWick panel API worker.
-# After `wrangler kv:namespace create PANEL_KV`, paste the generated id below.
+# wrangler.toml for the JohnWick panel API worker.
+# After `wrangler kv namespace create PANEL_KV`, paste the generated id below.
 
 name = "jwg-panel-api"
 main = "src/index.js"
@@ -8,7 +8,7 @@ compatibility_date = "2024-11-01"
 # Bind a KV namespace named PANEL_KV (the code reads env.PANEL_KV).
 [[kv_namespaces]]
 binding = "PANEL_KV"
-id = "REPLACE_WITH_YOUR_KV_NAMESPACE_ID"
+id = "598f1df2792c4966bb14eb1e1db621c8"
 
 # Secrets are set with `wrangler secret put NAME` -- NEVER write real values here.
 #   SESSION_SECRET : long random string, signs session tokens
